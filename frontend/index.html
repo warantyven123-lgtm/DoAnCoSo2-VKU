@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Animal Rescue Map — Bản đồ Cứu trợ Động vật Đà Nẵng</title>
+
+    <!-- Bootstrap 5.3.3 CSS (CDN) -->
+    <link
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        rel="stylesheet"
+        integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
+        crossorigin="anonymous"
+    >
+
+    <!-- Leaflet 1.9.4 CSS (CDN) -->
+    <link
+        rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+        crossorigin=""
+    >
+
+    <!-- Leaflet.markercluster 1.5.3 CSS (CDN) -->
+    <link
+        rel="stylesheet"
+        href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"
+    >
+    <link
+        rel="stylesheet"
+        href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"
+    >
+
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- Thanh Navbar trên cùng (Mobile-first) -->
+    <header class="app-navbar bg-white border-bottom shadow-sm">
+        <nav class="navbar navbar-light py-2 px-2 px-sm-3" aria-label="Điều hướng chính">
+            <div class="container-fluid px-0 d-flex flex-wrap align-items-center justify-content-between gap-2">
+                <!-- Logo & Tên Web -->
+                <a class="navbar-brand d-flex align-items-center gap-2 m-0 fw-bold text-dark" href="#">
+                    <span class="brand-badge d-inline-flex align-items-center justify-content-center rounded-3" aria-hidden="true">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="11" cy="4" r="2"/>
+                            <circle cx="18" cy="8" r="2"/>
+                            <circle cx="20" cy="16" r="2"/>
+                            <path d="M9 10a5 5 0 0 1 5 5v3.5a3.5 3.5 0 0 1-6.84 1.045Q6.52 17.48 4.46 16.84A3.5 3.5 0 0 1 5.5 10Z"/>
+                        </svg>
+                    </span>
+                    <span class="brand-title-wrap d-flex flex-column lh-1">
+                        <span class="brand-title">Animal Rescue Map</span>
+                        <small class="brand-subtitle d-none d-sm-inline text-muted fw-normal">Đà Nẵng • Cộng đồng cứu hộ</small>
+                    </span>
+                </a>
+
+                <!-- Nhóm thao tác phải: Vị trí của tôi & Trạng thái đăng nhập -->
+                <div class="nav-actions d-flex flex-wrap align-items-center justify-content-end gap-1 gap-sm-2 order-lg-3">
+                    <!-- Nút "Vị trí của tôi" (HTML5 Geolocation API) -->
+                    <button
+                        type="button"
+                        id="btnMyLocation"
+                        class="btn btn-outline-primary btn-sm d-inline-flex align-items-center gap-1 rounded-pill px-2 px-sm-3 py-1 py-sm-2 fw-semibold btn-my-location"
+                        title="Xác định vị trí hiện tại của bạn"
+                    >
+                        <span id="myLocationSpinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                        <svg id="myLocationIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="M12 2v3m0 14v3M2 12h3m14 0h3"/>
+                            <circle cx="12" cy="12" r="7"/>
+                        </svg>
+                        <span id="myLocationText">Vị trí của tôi</span>
+                    </button>
+
+                    <!-- Khi chưa đăng nhập -->
+                    <div id="navGuestArea" class="d-inline-flex align-items-center">
+                        <a
+                            href="login.html"
+                            id="btnNavLogin"
+                            class="btn btn-brand btn-sm rounded-pill px-3 py-1 py-sm-2 fw-semibold d-inline-flex align-items-center gap-1 nav-auth-btn"
+                        >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+                                <polyline points="10 17 15 12 10 7"/>
+                                <line x1="15" x2="3" y1="12" y2="12"/>
+                            </svg>
+                            <span>Đăng nhập</span>
+                        </a>
+                    </div>
+
+                    <!-- Khi đã đăng nhập -->
+                    <div id="navUserArea" class="d-none d-inline-flex flex-wrap align-items-center gap-1 gap-sm-2">
+                        <span class="nav-user-pill d-inline-flex align-items-center gap-1 rounded-pill px-2 py-1 border bg-light small fw-semibold text-dark">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+                                <circle cx="12" cy="7" r="4"/>
+                            </svg>
+                            <span id="navUserName" class="nav-user-name text-truncate"></span>
+                        </span>
+
+                        <a
+                            href="admin.html"
+                            id="btnNavAdmin"
+                            class="btn btn-dark btn-sm rounded-pill px-2 px-sm-3 py-1 fw-semibold d-none nav-auth-btn"
+                        >
+                            Quản trị (Admin)
+                        </a>
+
+                        <button
+                            type="button"
+                            id="btnNavLogout"
+                            class="btn btn-outline-danger btn-sm rounded-pill px-2 px-sm-3 py-1 fw-semibold nav-auth-btn"
+                        >
+                            Đăng xuất
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Bộ lọc trạng thái -->
+                <div
+                    id="statusFilterGroup"
+                    class="status-filter-bar d-flex align-items-center gap-1 gap-sm-2 order-lg-2 pt-1 pt-lg-0"
+                    role="group"
+                    aria-label="Bộ lọc trạng thái cứu trợ"
+                >
+                    <button type="button" class="btn btn-sm rounded-pill filter-btn active" data-status="all">
+                        <span>Tất cả</span>
+                        <span class="filter-count badge rounded-pill ms-1" data-count="all">4</span>
+                    </button>
+                    <button type="button" class="btn btn-sm rounded-pill filter-btn" data-status="pending">
+                        <span>Đang chờ cứu trợ</span>
+                        <span class="filter-count badge rounded-pill ms-1" data-count="pending">2</span>
+                    </button>
+                    <button type="button" class="btn btn-sm rounded-pill filter-btn" data-status="treating">
+                        <span>Đang điều trị</span>
+                        <span class="filter-count badge rounded-pill ms-1" data-count="treating">1</span>
+                    </button>
+                    <button type="button" class="btn btn-sm rounded-pill filter-btn" data-status="completed">
+                        <span>Hoàn thành</span>
+                        <span class="filter-count badge rounded-pill ms-1" data-count="completed">1</span>
+                    </button>
+                </div>
+            </div>
+        </nav>
+    </header>
+
+    <!-- Vùng bản đồ toàn màn hình còn lại -->
+    <main class="map-wrapper">
+        <div id="map" role="application" aria-label="Bản đồ cứu trợ động vật khu vực Đà Nẵng"></div>
+
+        <!-- Thanh thông báo khi người dùng đang chọn điểm trực tiếp trên bản đồ -->
+        <div id="pickingBanner" class="picking-banner shadow d-none" role="status" aria-live="polite">
+            <div class="d-flex align-items-center justify-content-between gap-2">
+                <div class="d-flex align-items-center gap-2">
+                    <span class="picking-dot" aria-hidden="true"></span>
+                    <span class="small fw-semibold">Click / chạm lên bản đồ để chọn vị trí cứu trợ</span>
+                </div>
+                <button type="button" id="btnCancelPick" class="btn btn-light btn-sm rounded-pill px-3 fw-semibold">
+                    Hủy
+                </button>
+            </div>
+        </div>
+
+        <!-- Chú giải màu pin -->
+        <aside class="map-legend shadow-sm rounded-3" aria-label="Chú giải màu điểm cứu trợ">
+            <div class="legend-item">
+                <span class="legend-dot legend-dot-urgent" aria-hidden="true"></span>
+                <span>Khẩn cấp</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot legend-dot-normal" aria-hidden="true"></span>
+                <span>Thông thường</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot legend-dot-completed" aria-hidden="true"></span>
+                <span>Đã hoàn thành</span>
+            </div>
+        </aside>
+
+        <!-- Nút nổi "+ Báo cáo cứu trợ" ở góc dưới bên phải -->
+        <button
+            type="button"
+            id="btnOpenReportModal"
+            class="btn btn-danger fab-report shadow-lg d-inline-flex align-items-center gap-2 rounded-pill fw-bold"
+            aria-label="Mở biểu mẫu báo cáo cứu trợ mới"
+        >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
+                <circle cx="12" cy="10" r="3"/>
+            </svg>
+            <span>+ Báo cáo cứu trợ</span>
+        </button>
+    </main>
+
+    <!-- Bootstrap Modal: Tạo báo cáo cứu trợ mới -->
+    <div
+        class="modal fade"
+        id="reportModal"
+        tabindex="-1"
+        aria-labelledby="reportModalLabel"
+        aria-hidden="true"
+    >
+        <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-fullscreen-sm-down">
+            <div class="modal-content border-0 shadow-lg">
+                <div class="modal-header border-bottom bg-light">
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="modal-header-icon d-inline-flex align-items-center justify-content-center rounded-circle bg-danger-subtle text-danger">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M12 9v4m0 4h.01"/>
+                                <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/>
+                            </svg>
+                        </span>
+                        <h2 class="modal-title h5 fw-bold mb-0" id="reportModalLabel">Báo cáo cứu trợ mới</h2>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Đóng"></button>
+                </div>
+
+                <form id="reportForm" novalidate>
+                    <div class="modal-body p-3 p-sm-4">
+                        <!-- Loại động vật -->
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">
+                                Loại động vật <span class="text-danger">*</span>
+                            </label>
+                            <div class="row g-2" role="radiogroup" aria-label="Chọn loại động vật">
+                                <div class="col-4">
+                                    <input type="radio" class="btn-check" name="animalType" id="animalDog" value="Chó" checked>
+                                    <label class="btn btn-outline-secondary w-100 py-2 fw-medium option-card" for="animalDog">
+                                        Chó
+                                    </label>
+                                </div>
+                                <div class="col-4">
+                                    <input type="radio" class="btn-check" name="animalType" id="animalCat" value="Mèo">
+                                    <label class="btn btn-outline-secondary w-100 py-2 fw-medium option-card" for="animalCat">
+                                        Mèo
+                                    </label>
+                                </div>
+                                <div class="col-4">
+                                    <input type="radio" class="btn-check" name="animalType" id="animalOther" value="Khác">
+                                    <label class="btn btn-outline-secondary w-100 py-2 fw-medium option-card" for="animalOther">
+                                        Khác
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Mức độ khẩn cấp -->
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">
+                                Mức độ khẩn cấp <span class="text-danger">*</span>
+                            </label>
+                            <div class="row g-2" role="radiogroup" aria-label="Chọn mức độ khẩn cấp">
+                                <div class="col-6">
+                                    <input type="radio" class="btn-check" name="urgency" id="urgencyUrgent" value="urgent" checked>
+                                    <label class="btn btn-outline-danger w-100 py-2 d-flex align-items-center justify-content-center gap-2 fw-semibold" for="urgencyUrgent">
+                                        <span class="legend-dot legend-dot-urgent" aria-hidden="true"></span>
+                                        <span>Khẩn cấp</span>
+                                    </label>
+                                </div>
+                                <div class="col-6">
+                                    <input type="radio" class="btn-check" name="urgency" id="urgencyNormal" value="normal">
+                                    <label class="btn btn-outline-warning text-dark w-100 py-2 d-flex align-items-center justify-content-center gap-2 fw-semibold" for="urgencyNormal">
+                                        <span class="legend-dot legend-dot-normal" aria-hidden="true"></span>
+                                        <span>Thông thường</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Mô tả tình trạng -->
+                        <div class="mb-3">
+                            <label for="reportDescription" class="form-label fw-semibold">
+                                Mô tả tình trạng <span class="text-danger">*</span>
+                            </label>
+                            <textarea
+                                class="form-control"
+                                id="reportDescription"
+                                rows="3"
+                                placeholder="Mô tả tình trạng chấn thương, ngoại hình, biểu hiện của động vật..."
+                                required
+                            ></textarea>
+                            <div class="invalid-feedback">
+                                Vui lòng nhập mô tả tình trạng động vật cần cứu trợ.
+                            </div>
+                        </div>
+
+                        <!-- Ghi chú địa chỉ -->
+                        <div class="mb-3">
+                            <label for="reportAddress" class="form-label fw-semibold">
+                                Địa chỉ / Điểm dễ nhận biết <span class="text-muted fw-normal">(tùy chọn)</span>
+                            </label>
+                            <input
+                                type="text"
+                                class="form-control"
+                                id="reportAddress"
+                                placeholder="VD: Gần chân cầu Rồng, đường Bạch Đằng, Hải Châu..."
+                            >
+                        </div>
+
+                        <!-- Chọn file ảnh + Xem trước -->
+                        <div class="mb-3">
+                            <label for="reportImage" class="form-label fw-semibold">
+                                Hình ảnh hiện trường
+                            </label>
+                            <input
+                                class="form-control"
+                                type="file"
+                                id="reportImage"
+                                accept="image/*"
+                            >
+                            <div id="imageError" class="text-danger small mt-1 d-none">
+                                Vui lòng chọn tệp hình ảnh hợp lệ (JPG, PNG, WEBP...).
+                            </div>
+                            <div id="imagePreviewWrapper" class="image-preview-wrapper mt-2 d-none position-relative">
+                                <img id="imagePreview" src="" alt="Xem trước ảnh báo cáo" class="img-fluid rounded-3 border w-100">
+                                <button
+                                    type="button"
+                                    id="btnClearImage"
+                                    class="btn btn-dark btn-sm rounded-pill position-absolute top-0 end-0 m-2"
+                                >
+                                    Xóa ảnh
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Chọn vị trí (GPS hoặc Click trực tiếp trên bản đồ) -->
+                        <div class="mb-2">
+                            <label class="form-label fw-semibold">
+                                Vị trí trên bản đồ <span class="text-danger">*</span>
+                            </label>
+                            <div class="row g-2 mb-2">
+                                <div class="col-12 col-sm-6">
+                                    <button
+                                        type="button"
+                                        id="btnGetGpsInModal"
+                                        class="btn btn-outline-primary w-100 d-inline-flex align-items-center justify-content-center gap-2 py-2"
+                                    >
+                                        <span id="modalGpsSpinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                            <circle cx="12" cy="12" r="3"/>
+                                            <path d="M12 2v3m0 14v3M2 12h3m14 0h3"/>
+                                            <circle cx="12" cy="12" r="7"/>
+                                        </svg>
+                                        <span>Lấy GPS hiện tại</span>
+                                    </button>
+                                </div>
+                                <div class="col-12 col-sm-6">
+                                    <button
+                                        type="button"
+                                        id="btnPickOnMap"
+                                        class="btn btn-outline-success w-100 d-inline-flex align-items-center justify-content-center gap-2 py-2"
+                                    >
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                            <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
+                                            <circle cx="12" cy="10" r="3"/>
+                                        </svg>
+                                        <span>Chọn trên bản đồ</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <input type="hidden" id="reportLat">
+                            <input type="hidden" id="reportLng">
+
+                            <div id="locationStatusBox" class="location-status-box rounded-3 p-2 small bg-light border text-muted">
+                                <span id="locationStatusText">Chưa có tọa độ. Hãy lấy GPS hoặc chọn trực tiếp trên bản đồ.</span>
+                            </div>
+                            <div id="locationError" class="text-danger small mt-1 d-none">
+                                Vui lòng xác định vị trí bằng GPS hoặc click trực tiếp lên bản đồ.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="modal-footer border-top bg-light">
+                        <button type="button" class="btn btn-outline-secondary rounded-pill px-4" data-bs-dismiss="modal">
+                            Hủy
+                        </button>
+                        <button type="submit" id="btnSubmitReport" class="btn btn-danger rounded-pill px-4 fw-semibold">
+                            Gửi báo cáo
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap Offcanvas (Drawer trượt): Chi tiết điểm cứu trợ -->
+    <div
+        class="offcanvas offcanvas-end rescue-offcanvas"
+        tabindex="-1"
+        id="rescueOffcanvas"
+        aria-labelledby="detailTitle"
+    >
+        <div class="offcanvas-header border-bottom">
+            <div class="d-flex align-items-center gap-2 overflow-hidden">
+                <span id="detailAnimalBadge" class="badge rounded-pill text-bg-dark flex-shrink-0">Chó</span>
+                <h2 class="offcanvas-title h6 fw-bold mb-0 text-truncate" id="detailTitle">Chi tiết cứu trợ</h2>
+            </div>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Đóng"></button>
+        </div>
+
+        <div class="offcanvas-body d-flex flex-column gap-3 p-3">
+            <!-- Hình ảnh điểm cứu trợ -->
+            <div class="detail-image-card position-relative rounded-3 overflow-hidden border bg-light">
+                <img id="detailImage" src="" alt="Hình ảnh động vật cần cứu trợ" class="w-100 detail-img">
+                <span id="detailUrgencyBadge" class="badge position-absolute top-0 start-0 m-2 px-2 py-1 shadow-sm">
+                    Khẩn cấp
+                </span>
+            </div>
+
+            <!-- Trạng thái & Cập nhật trạng thái -->
+            <div class="p-3 rounded-3 bg-light border">
+                <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                    <span class="small text-muted fw-semibold">Trạng thái hiện tại</span>
+                    <span id="detailStatusBadge" class="badge rounded-pill px-3 py-1">Đang chờ cứu trợ</span>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    <label for="detailStatusSelect" class="small text-muted flex-shrink-0 mb-0">Cập nhật:</label>
+                    <select id="detailStatusSelect" class="form-select form-select-sm">
+                        <option value="pending">Đang chờ cứu trợ</option>
+                        <option value="treating">Đang điều trị</option>
+                        <option value="completed">Hoàn thành</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Thông tin địa điểm & thời gian -->
+            <div class="d-flex flex-column gap-1 small text-secondary">
+                <div class="d-flex align-items-start gap-2">
+                    <svg class="flex-shrink-0 mt-1 text-danger" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
+                        <circle cx="12" cy="10" r="3"/>
+                    </svg>
+                    <span id="detailAddress" class="fw-medium text-dark"></span>
+                </div>
+                <div class="d-flex align-items-center justify-content-between gap-2 ps-4 text-muted">
+                    <span id="detailCoords"></span>
+                    <span id="detailTime"></span>
+                </div>
+            </div>
+
+            <!-- Mô tả chi tiết -->
+            <div>
+                <h3 class="h6 fw-bold mb-1">Mô tả tình trạng</h3>
+                <p id="detailDescription" class="mb-0 text-secondary small lh-base"></p>
+            </div>
+
+            <!-- Nút Chỉ đường Google Maps -->
+            <a
+                id="btnGoogleMaps"
+                href="#"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="btn btn-primary w-100 d-inline-flex align-items-center justify-content-center gap-2 rounded-3 py-2 fw-semibold shadow-sm"
+            >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polygon points="3 11 22 2 13 21 11 13 3 11"/>
+                </svg>
+                <span>Chỉ đường Google Maps</span>
+            </a>
+
+            <hr class="my-1">
+
+            <!-- Khung bình luận -->
+            <section aria-labelledby="commentsHeading">
+                <div class="d-flex align-items-center justify-content-between mb-2">
+                    <h3 id="commentsHeading" class="h6 fw-bold mb-0">Bình luận & Cập nhật</h3>
+                    <span id="detailCommentCount" class="badge text-bg-secondary rounded-pill">0</span>
+                </div>
+
+                <div id="commentList" class="comment-list d-flex flex-column gap-2 mb-3"></div>
+
+                <form id="commentForm" class="comment-form d-flex flex-column gap-2">
+                    <input
+                        type="text"
+                        id="commentAuthor"
+                        class="form-control form-control-sm"
+                        placeholder="Tên của bạn (mặc định: Tình nguyện viên)"
+                        maxlength="50"
+                    >
+                    <div class="input-group input-group-sm">
+                        <input
+                            type="text"
+                            id="commentText"
+                            class="form-control"
+                            placeholder="Nhập thông tin hỗ trợ hoặc bình luận..."
+                            required
+                            maxlength="300"
+                        >
+                        <button class="btn btn-success px-3 fw-semibold" type="submit">Gửi</button>
+                    </div>
+                </form>
+            </section>
+        </div>
+    </div>
+
+    <!-- Vùng hiển thị thông báo Toast -->
+    <div id="toastContainer" class="toast-container position-fixed p-3" aria-live="polite" aria-atomic="true"></div>
+
+    <!-- Bootstrap 5.3.3 JS Bundle (CDN) -->
+    <script
+        src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
+        crossorigin="anonymous"
+    ></script>
+
+    <!-- Leaflet 1.9.4 JS (CDN) -->
+    <script
+        src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin=""
+    ></script>
+
+    <!-- Leaflet.markercluster 1.5.3 JS (CDN) -->
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+    <!-- Dữ liệu mẫu & Logic bản đồ (Vanilla JS) -->
+    <script src="js/mockData.js"></script>
+    <script src="js/map.js"></script>
+</body>
+</html>
