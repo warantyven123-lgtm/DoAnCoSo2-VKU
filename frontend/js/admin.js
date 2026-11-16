@@ -1,14 +1,17 @@
 /**
- * Animal Rescue Map - Logic Bảng điều khiển Quản trị (Vanilla JS)
- * Đọc dữ liệu điểm cứu trợ từ mockData.js, quản lý thống kê,
- * đổi trạng thái, ẩn/xóa tin rác, làm mờ tọa độ nhạy cảm và quản lý người dùng.
+ * Animal Rescue Map - Logic Bảng điều khiển Quản trị (Vanilla JS + REST API + JWT)
+ * Kết nối trực tiếp tới http://localhost:5000/api/admin/* với Authorization: Bearer <token>.
  */
 (function () {
     'use strict';
 
-    var MOCK = window.ANIMAL_RESCUE_MOCK || {
-        INITIAL_RESCUE_POINTS: [],
-        getDefaultImageForAnimal: function () { return ''; }
+    var API_BASE_URL = 'http://localhost:5000/api';
+    var BACKEND_ORIGIN = 'http://localhost:5000';
+
+    var DEFAULT_IMAGE_PATHS = {
+        'Chó': '/uploads/sample-dog-dragon-bridge.svg',
+        'Mèo': '/uploads/sample-cat-park.svg',
+        'Khác': '/uploads/sample-other-default.svg'
     };
 
     var STATUS_META = {
@@ -22,48 +25,10 @@
         normal: { label: 'Thông thường', badgeClass: 'text-bg-warning text-dark' }
     };
 
-    var INITIAL_USERS = [
-        {
-            id: 1,
-            name: 'Nguyễn Minh Anh',
-            email: 'minhanh.dn@gmail.com',
-            phone: '0905123456',
-            role: 'Tình nguyện viên/Trạm cứu hộ',
-            isTrustedVolunteer: true,
-            isLocked: false
-        },
-        {
-            id: 2,
-            name: 'Trần Thanh Tùng',
-            email: 'tung.tran@gmail.com',
-            phone: '0914223344',
-            role: 'Tình nguyện viên/Trạm cứu hộ',
-            isTrustedVolunteer: false,
-            isLocked: false
-        },
-        {
-            id: 3,
-            name: 'Lê Thị Thu Hương',
-            email: 'huong.le@gmail.com',
-            phone: '0935667788',
-            role: 'Người dân',
-            isTrustedVolunteer: false,
-            isLocked: false
-        },
-        {
-            id: 4,
-            name: 'Phạm Hoàng Nam',
-            email: 'hoangnam.dn@gmail.com',
-            phone: '0987654321',
-            role: 'Người dân',
-            isTrustedVolunteer: false,
-            isLocked: true
-        }
-    ];
-
     // Trạng thái làm việc trong trang Admin
-    var rescuePoints = cloneRescuePoints(MOCK.INITIAL_RESCUE_POINTS);
-    var usersList = buildInitialUsers();
+    var currentAdmin = null;
+    var rescuePoints = [];
+    var usersList = [];
     var rescueStatusFilter = 'all';
     var rescueSearchKeyword = '';
     var userSearchKeyword = '';
@@ -77,56 +42,152 @@
     function init() {
         cacheDomElements();
         confirmDeleteModal = new bootstrap.Modal(el.confirmDeleteModal);
-        renderAdminSessionName();
-        bindEvents();
-        renderStats();
-        renderRescueTable();
-        renderUsersTable();
-    }
 
-    function cloneRescuePoints(points) {
-        return points.map(function (point) {
-            return Object.assign({}, point, {
-                isHidden: Boolean(point.isHidden),
-                isSensitiveBlurred: Boolean(point.isSensitiveBlurred)
-            });
-        });
-    }
-
-    function buildInitialUsers() {
-        var cloned = INITIAL_USERS.map(function (user) {
-            return Object.assign({}, user);
-        });
-
-        // Gộp thêm tài khoản người dùng từng đăng ký thử ở login.html (nếu có)
-        try {
-            var rawRegistered = localStorage.getItem('mockRegisteredUsers');
-            var registered = rawRegistered ? JSON.parse(rawRegistered) : [];
-            if (Array.isArray(registered)) {
-                var nextId = cloned.length + 1;
-                registered.forEach(function (item) {
-                    if (!item || !item.email) return;
-                    var exists = cloned.some(function (u) {
-                        return u.email.toLowerCase() === item.email.toLowerCase();
-                    });
-                    if (!exists) {
-                        cloned.push({
-                            id: nextId++,
-                            name: item.name || 'Thành viên mới',
-                            email: item.email,
-                            phone: item.phone || 'Chưa cập nhật',
-                            role: item.role || 'Người dân',
-                            isTrustedVolunteer: false,
-                            isLocked: false
-                        });
-                    }
-                });
-            }
-        } catch (err) {
-            // Bỏ qua lỗi đọc JSON từ localStorage nếu dữ liệu không hợp lệ
+        if (!ensureAdminSession()) {
+            return;
         }
 
-        return cloned;
+        renderAdminSessionName();
+        bindEvents();
+        loadDashboardData();
+    }
+
+    function readCurrentUser() {
+        try {
+            var rawUser = localStorage.getItem('currentUser');
+            return rawUser ? JSON.parse(rawUser) : null;
+        } catch (err) {
+            return null;
+        }
+    }
+
+    function getAuthToken() {
+        var token = localStorage.getItem('authToken');
+        if (token) return token;
+        var user = readCurrentUser();
+        return user && user.token ? user.token : '';
+    }
+
+    function clearSessionAndRedirect() {
+        localStorage.removeItem('currentUser');
+        localStorage.removeItem('authToken');
+        window.location.href = 'login.html';
+    }
+
+    function ensureAdminSession() {
+        var token = getAuthToken();
+        var user = readCurrentUser();
+        if (!token || !user || String(user.role || '').toLowerCase() !== 'admin') {
+            clearSessionAndRedirect();
+            return false;
+        }
+        currentAdmin = user;
+        return true;
+    }
+
+    function resolveImageUrl(rawUrl, animalType) {
+        var fallbackPath = DEFAULT_IMAGE_PATHS[animalType] || DEFAULT_IMAGE_PATHS['Khác'];
+        var url = String(rawUrl || '').trim();
+        if (!url) {
+            return BACKEND_ORIGIN + fallbackPath;
+        }
+        if (/^(https?:)?\/\//i.test(url) || url.indexOf('data:') === 0) {
+            return url;
+        }
+        if (url.charAt(0) === '/') {
+            return BACKEND_ORIGIN + url;
+        }
+        return BACKEND_ORIGIN + '/' + url.replace(/^\/+/, '');
+    }
+
+    function normalizePinFromApi(pin) {
+        var animalType = pin.animalType || (pin.category && pin.category.name) || 'Khác';
+        var rawImage =
+            pin.image ||
+            (Array.isArray(pin.images) && pin.images[0] && pin.images[0].url) ||
+            '';
+
+        return {
+            id: Number(pin.id),
+            title: pin.title || (animalType + ' cần cứu trợ'),
+            animalType: animalType,
+            urgency: pin.urgency || 'normal',
+            status: pin.status || 'pending',
+            lat: Number(pin.lat),
+            lng: Number(pin.lng),
+            address: pin.address || '',
+            description: pin.description || '',
+            image: resolveImageUrl(rawImage, animalType),
+            isHidden: Boolean(pin.isHidden),
+            isSensitiveBlurred: Boolean(pin.isSensitiveBlurred),
+            createdAt: pin.createdAt
+        };
+    }
+
+    async function apiAdminFetch(endpoint, options) {
+        var token = getAuthToken();
+        if (!token) {
+            clearSessionAndRedirect();
+            throw new Error('Phiên đăng nhập đã hết hạn.');
+        }
+
+        var fetchOptions = Object.assign({}, options || {});
+        var headers = Object.assign({}, fetchOptions.headers || {}, {
+            Authorization: 'Bearer ' + token
+        });
+
+        if (fetchOptions.body && typeof fetchOptions.body === 'string' && !headers['Content-Type']) {
+            headers['Content-Type'] = 'application/json';
+        }
+        fetchOptions.headers = headers;
+
+        var response = await fetch(API_BASE_URL + endpoint, fetchOptions);
+        var data = await response.json().catch(function () {
+            return {};
+        });
+
+        if (response.status === 401 || response.status === 403) {
+            clearSessionAndRedirect();
+            throw new Error(data.message || 'Không có quyền truy cập trang Quản trị.');
+        }
+
+        if (!response.ok) {
+            throw new Error(data.message || 'Thao tác thất bại.');
+        }
+
+        return data;
+    }
+
+    async function loadDashboardData() {
+        try {
+            await Promise.all([
+                fetchStats(),
+                fetchAdminPins(),
+                fetchUsers()
+            ]);
+        } catch (err) {
+            showToast(
+                err.message || 'Không thể tải dữ liệu từ máy chủ Back-end (http://localhost:5000).',
+                'danger'
+            );
+        }
+    }
+
+    async function fetchStats() {
+        var data = await apiAdminFetch('/admin/stats', { method: 'GET' });
+        renderStats(data);
+    }
+
+    async function fetchAdminPins() {
+        var data = await apiAdminFetch('/admin/pins', { method: 'GET' });
+        rescuePoints = Array.isArray(data.pins) ? data.pins.map(normalizePinFromApi) : [];
+        renderRescueTable();
+    }
+
+    async function fetchUsers() {
+        var data = await apiAdminFetch('/admin/users', { method: 'GET' });
+        usersList = Array.isArray(data.users) ? data.users : [];
+        renderUsersTable();
     }
 
     function cacheDomElements() {
@@ -156,15 +217,8 @@
     }
 
     function renderAdminSessionName() {
-        try {
-            var rawUser = localStorage.getItem('currentUser');
-            if (!rawUser) return;
-            var user = JSON.parse(rawUser);
-            if (user && user.name) {
-                el.adminUserName.textContent = user.name;
-            }
-        } catch (err) {
-            // Giữ tên mặc định "Quản trị viên"
+        if (currentAdmin && currentAdmin.name) {
+            el.adminUserName.textContent = currentAdmin.name;
         }
     }
 
@@ -204,26 +258,34 @@
         // Xác nhận xóa tin rác trong Modal
         el.btnConfirmDelete.addEventListener('click', function () {
             if (pendingDeleteId === null) return;
-            deleteRescuePoint(pendingDeleteId);
+            var targetId = pendingDeleteId;
             pendingDeleteId = null;
             confirmDeleteModal.hide();
+            deleteRescuePoint(targetId);
         });
     }
 
     /* --------------------------------------------------------------------------
-       Đăng xuất (Xóa localStorage và chuyển về login.html)
+       Đăng xuất (Xóa JWT trong localStorage và chuyển về login.html)
        -------------------------------------------------------------------------- */
 
     function handleLogout() {
-        localStorage.clear();
-        window.location.href = 'login.html';
+        clearSessionAndRedirect();
     }
 
     /* --------------------------------------------------------------------------
-       Thống kê 4 Card trên cùng (đọc từ mockData.js)
+       Thống kê 4 Card trên cùng (GET /api/admin/stats)
        -------------------------------------------------------------------------- */
 
-    function renderStats() {
+    function renderStats(stats) {
+        if (stats && typeof stats.total === 'number') {
+            el.statTotal.textContent = String(stats.total);
+            el.statPending.textContent = String(stats.pending || 0);
+            el.statTreating.textContent = String(stats.treating || 0);
+            el.statCompleted.textContent = String(stats.completed || 0);
+            return;
+        }
+
         var total = rescuePoints.length;
         var pending = 0;
         var treating = 0;
@@ -252,6 +314,16 @@
             return maskedLat + ', ' + maskedLng + ' (Đã làm mờ ~1km)';
         }
         return point.lat.toFixed(5) + ', ' + point.lng.toFixed(5);
+    }
+
+    function replaceLocalPin(updatedPin) {
+        var normalized = normalizePinFromApi(updatedPin);
+        for (var i = 0; i < rescuePoints.length; i++) {
+            if (rescuePoints[i].id === normalized.id) {
+                rescuePoints[i] = normalized;
+                break;
+            }
+        }
     }
 
     function renderRescueTable() {
@@ -286,12 +358,12 @@
                 tr.classList.add('admin-row-hidden');
             }
 
-            // 1. Ảnh nhỏ
+            // 1. Ảnh nhỏ (từ http://localhost:5000/uploads/...)
             var tdImg = document.createElement('td');
             tdImg.className = 'ps-3 ps-sm-4';
             var img = document.createElement('img');
             img.className = 'admin-thumb';
-            img.src = point.image || MOCK.getDefaultImageForAnimal(point.animalType);
+            img.src = resolveImageUrl(point.image, point.animalType);
             img.alt = 'Ảnh ' + point.title;
             tdImg.appendChild(img);
 
@@ -345,7 +417,7 @@
             statusBadge.textContent = statusMeta.label;
             tdStatus.appendChild(statusBadge);
 
-            // 5. Công tắc Làm mờ tọa độ (ca nhạy cảm)
+            // 5. Công tắc Làm mờ tọa độ (PATCH /api/admin/pins/:id/blur)
             var tdBlur = document.createElement('td');
             var switchWrap = document.createElement('div');
             switchWrap.className = 'form-check form-switch m-0 d-inline-flex align-items-center gap-2';
@@ -364,15 +436,31 @@
             switchLabel.setAttribute('for', switchInput.id);
             switchLabel.textContent = point.isSensitiveBlurred ? 'Đang làm mờ' : 'Công khai';
 
-            switchInput.addEventListener('change', function () {
-                point.isSensitiveBlurred = switchInput.checked;
-                renderRescueTable();
-                showToast(
-                    point.isSensitiveBlurred
-                        ? 'Đã bật làm mờ tọa độ cho "' + point.title + '".'
-                        : 'Đã khôi phục tọa độ chính xác cho "' + point.title + '".',
-                    point.isSensitiveBlurred ? 'warning' : 'success'
-                );
+            switchInput.addEventListener('change', async function () {
+                var targetValue = switchInput.checked;
+                switchInput.disabled = true;
+                try {
+                    var data = await apiAdminFetch('/admin/pins/' + point.id + '/blur', {
+                        method: 'PATCH',
+                        body: JSON.stringify({ isSensitiveBlurred: targetValue })
+                    });
+                    if (data.pin) {
+                        replaceLocalPin(data.pin);
+                    } else {
+                        point.isSensitiveBlurred = targetValue;
+                    }
+                    renderRescueTable();
+                    showToast(
+                        targetValue
+                            ? 'Đã bật làm mờ tọa độ cho "' + point.title + '".'
+                            : 'Đã khôi phục tọa độ chính xác cho "' + point.title + '".',
+                        targetValue ? 'warning' : 'success'
+                    );
+                } catch (err) {
+                    switchInput.checked = !targetValue;
+                    switchInput.disabled = false;
+                    showToast(err.message || 'Không thể thay đổi chế độ làm mờ tọa độ.', 'danger');
+                }
             });
 
             switchWrap.appendChild(switchInput);
@@ -386,7 +474,7 @@
             var actionGroup = document.createElement('div');
             actionGroup.className = 'd-inline-flex flex-wrap align-items-center justify-content-end gap-1';
 
-            // Đổi trạng thái
+            // Đổi trạng thái (PATCH /api/admin/pins/:id/status)
             var statusSelect = document.createElement('select');
             statusSelect.className = 'form-select form-select-sm w-auto';
             statusSelect.setAttribute('aria-label', 'Đổi trạng thái cho ' + point.title);
@@ -403,34 +491,66 @@
                 statusSelect.appendChild(opt);
             });
 
-            statusSelect.addEventListener('change', function () {
-                point.status = statusSelect.value;
-                renderStats();
-                renderRescueTable();
-                showToast(
-                    'Đã đổi trạng thái "' + point.title + '" thành: ' + STATUS_META[point.status].label,
-                    'success'
-                );
+            statusSelect.addEventListener('change', async function () {
+                var previousStatus = point.status;
+                var nextStatus = statusSelect.value;
+                statusSelect.disabled = true;
+                try {
+                    var data = await apiAdminFetch('/admin/pins/' + point.id + '/status', {
+                        method: 'PATCH',
+                        body: JSON.stringify({ status: nextStatus })
+                    });
+                    if (data.pin) {
+                        replaceLocalPin(data.pin);
+                    } else {
+                        point.status = nextStatus;
+                    }
+                    await fetchStats();
+                    renderRescueTable();
+                    showToast(
+                        'Đã đổi trạng thái "' + point.title + '" thành: ' + STATUS_META[nextStatus].label,
+                        'success'
+                    );
+                } catch (err) {
+                    statusSelect.value = previousStatus;
+                    statusSelect.disabled = false;
+                    showToast(err.message || 'Không thể cập nhật trạng thái.', 'danger');
+                }
             });
 
-            // Nút Ẩn / Hiện tin
+            // Nút Ẩn / Hiện tin (PATCH /api/admin/pins/:id/hide)
             var btnHide = document.createElement('button');
             btnHide.type = 'button';
             btnHide.className = 'btn btn-sm ' + (point.isHidden ? 'btn-outline-success' : 'btn-outline-secondary');
             btnHide.textContent = point.isHidden ? 'Hiện' : 'Ẩn';
             btnHide.title = point.isHidden ? 'Hiện lại điểm cứu trợ trên bản đồ' : 'Ẩn tạm điểm cứu trợ nghi ngờ rác';
-            btnHide.addEventListener('click', function () {
-                point.isHidden = !point.isHidden;
-                renderRescueTable();
-                showToast(
-                    point.isHidden
-                        ? 'Đã ẩn báo cáo "' + point.title + '" khỏi bản đồ công khai.'
-                        : 'Đã hiển thị lại báo cáo "' + point.title + '".',
-                    'info'
-                );
+            btnHide.addEventListener('click', async function () {
+                var nextHidden = !point.isHidden;
+                btnHide.disabled = true;
+                try {
+                    var data = await apiAdminFetch('/admin/pins/' + point.id + '/hide', {
+                        method: 'PATCH',
+                        body: JSON.stringify({ isHidden: nextHidden })
+                    });
+                    if (data.pin) {
+                        replaceLocalPin(data.pin);
+                    } else {
+                        point.isHidden = nextHidden;
+                    }
+                    renderRescueTable();
+                    showToast(
+                        nextHidden
+                            ? 'Đã ẩn báo cáo "' + point.title + '" khỏi bản đồ công khai.'
+                            : 'Đã hiển thị lại báo cáo "' + point.title + '".',
+                        'info'
+                    );
+                } catch (err) {
+                    btnHide.disabled = false;
+                    showToast(err.message || 'Không thể cập nhật trạng thái ẩn/hiện.', 'danger');
+                }
             });
 
-            // Nút Xóa tin rác
+            // Nút Xóa tin rác (DELETE /api/admin/pins/:id)
             var btnDelete = document.createElement('button');
             btnDelete.type = 'button';
             btnDelete.className = 'btn btn-sm btn-outline-danger';
@@ -458,21 +578,27 @@
         });
     }
 
-    function deleteRescuePoint(pointId) {
-        var target = null;
-        rescuePoints = rescuePoints.filter(function (point) {
-            if (point.id === pointId) {
-                target = point;
-                return false;
+    async function deleteRescuePoint(pointId) {
+        try {
+            var target = rescuePoints.find(function (p) { return p.id === pointId; });
+            await apiAdminFetch('/admin/pins/' + pointId, {
+                method: 'DELETE'
+            });
+
+            rescuePoints = rescuePoints.filter(function (point) {
+                return point.id !== pointId;
+            });
+
+            await fetchStats();
+            renderRescueTable();
+
+            if (target) {
+                showToast('Đã xóa tin rác "' + target.title + '" khỏi hệ thống.', 'danger');
+            } else {
+                showToast('Đã xóa điểm cứu trợ khỏi hệ thống.', 'danger');
             }
-            return true;
-        });
-
-        renderStats();
-        renderRescueTable();
-
-        if (target) {
-            showToast('Đã xóa tin rác "' + target.title + '" khỏi hệ thống.', 'danger');
+        } catch (err) {
+            showToast(err.message || 'Không thể xóa điểm cứu trợ.', 'danger');
         }
     }
 
@@ -480,12 +606,21 @@
        Bảng Quản lý người dùng
        -------------------------------------------------------------------------- */
 
+    function replaceLocalUser(updatedUser) {
+        for (var i = 0; i < usersList.length; i++) {
+            if (usersList[i].id === updatedUser.id) {
+                usersList[i] = updatedUser;
+                break;
+            }
+        }
+    }
+
     function renderUsersTable() {
         el.usersTableBody.innerHTML = '';
 
         var filteredUsers = usersList.filter(function (user) {
             if (!userSearchKeyword) return true;
-            var text = (user.name + ' ' + user.email + ' ' + user.phone + ' ' + user.role).toLowerCase();
+            var text = (user.name + ' ' + user.email + ' ' + (user.phone || '') + ' ' + user.role).toLowerCase();
             return text.indexOf(userSearchKeyword) !== -1;
         });
 
@@ -521,7 +656,7 @@
 
             var metaEl = document.createElement('div');
             metaEl.className = 'small text-secondary';
-            metaEl.textContent = user.email + ' • ' + user.phone;
+            metaEl.textContent = user.email + ' • ' + (user.phone || 'Chưa cập nhật');
 
             tdAccount.appendChild(nameEl);
             tdAccount.appendChild(metaEl);
@@ -569,30 +704,65 @@
                 ? 'Gỡ huy hiệu'
                 : 'Cấp huy hiệu TNV uy tín';
             btnBadge.disabled = user.isLocked;
-            btnBadge.addEventListener('click', function () {
-                user.isTrustedVolunteer = !user.isTrustedVolunteer;
-                renderUsersTable();
-                showToast(
-                    user.isTrustedVolunteer
-                        ? 'Đã cấp huy hiệu Tình nguyện viên uy tín cho ' + user.name + '.'
-                        : 'Đã gỡ huy hiệu Tình nguyện viên uy tín của ' + user.name + '.',
-                    user.isTrustedVolunteer ? 'success' : 'info'
-                );
+            btnBadge.addEventListener('click', async function () {
+                var nextBadge = !user.isTrustedVolunteer;
+                btnBadge.disabled = true;
+                try {
+                    var data = await apiAdminFetch('/admin/users/' + user.id + '/badge', {
+                        method: 'PATCH',
+                        body: JSON.stringify({ isTrustedVolunteer: nextBadge })
+                    });
+                    if (data.user) {
+                        replaceLocalUser(data.user);
+                    } else {
+                        user.isTrustedVolunteer = nextBadge;
+                    }
+                    renderUsersTable();
+                    showToast(
+                        nextBadge
+                            ? 'Đã cấp huy hiệu Tình nguyện viên uy tín cho ' + user.name + '.'
+                            : 'Đã gỡ huy hiệu Tình nguyện viên uy tín của ' + user.name + '.',
+                        nextBadge ? 'success' : 'info'
+                    );
+                } catch (err) {
+                    btnBadge.disabled = user.isLocked;
+                    showToast(err.message || 'Không thể cập nhật huy hiệu.', 'danger');
+                }
             });
 
+            var isSelfAdmin = currentAdmin && Number(currentAdmin.id) === Number(user.id);
             var btnLock = document.createElement('button');
             btnLock.type = 'button';
             btnLock.className = 'btn btn-sm ' + (user.isLocked ? 'btn-outline-success' : 'btn-outline-danger');
             btnLock.textContent = user.isLocked ? 'Mở khóa' : 'Khóa tài khoản';
-            btnLock.addEventListener('click', function () {
-                user.isLocked = !user.isLocked;
-                renderUsersTable();
-                showToast(
-                    user.isLocked
-                        ? 'Đã khóa tài khoản ' + user.name + '.'
-                        : 'Đã mở khóa tài khoản ' + user.name + '.',
-                    user.isLocked ? 'warning' : 'success'
-                );
+            btnLock.disabled = isSelfAdmin;
+            if (isSelfAdmin) {
+                btnLock.title = 'Không thể tự khóa tài khoản đang đăng nhập';
+            }
+            btnLock.addEventListener('click', async function () {
+                var nextLocked = !user.isLocked;
+                btnLock.disabled = true;
+                try {
+                    var data = await apiAdminFetch('/admin/users/' + user.id + '/lock', {
+                        method: 'PATCH',
+                        body: JSON.stringify({ isLocked: nextLocked })
+                    });
+                    if (data.user) {
+                        replaceLocalUser(data.user);
+                    } else {
+                        user.isLocked = nextLocked;
+                    }
+                    renderUsersTable();
+                    showToast(
+                        nextLocked
+                            ? 'Đã khóa tài khoản ' + user.name + '.'
+                            : 'Đã mở khóa tài khoản ' + user.name + '.',
+                        nextLocked ? 'warning' : 'success'
+                    );
+                } catch (err) {
+                    btnLock.disabled = isSelfAdmin;
+                    showToast(err.message || 'Không thể thay đổi trạng thái khóa tài khoản.', 'danger');
+                }
             });
 
             actionWrap.appendChild(btnBadge);

@@ -1,13 +1,14 @@
 /**
- * Animal Rescue Map - Logic Đăng nhập & Đăng ký giả lập (Vanilla JS + localStorage)
+ * Animal Rescue Map - Logic Đăng nhập & Đăng ký (Vanilla JS + REST API + JWT)
  */
 (function () {
     'use strict';
 
+    var API_BASE_URL = 'http://localhost:5000/api';
+
     var STORAGE_KEYS = {
         CURRENT_USER: 'currentUser',
-        AUTH_TOKEN: 'authToken',
-        REGISTERED_USERS: 'mockRegisteredUsers'
+        AUTH_TOKEN: 'authToken'
     };
 
     var EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -86,7 +87,6 @@
             });
         });
 
-        // Xóa thông báo lỗi custom khi người dùng sửa số điện thoại
         el.registerPhone.addEventListener('input', function () {
             el.registerPhone.setCustomValidity('');
         });
@@ -105,7 +105,7 @@
     }
 
     /* --------------------------------------------------------------------------
-       Quản lý phiên đăng nhập giả lập trong localStorage
+       Quản lý phiên đăng nhập JWT trong localStorage
        -------------------------------------------------------------------------- */
 
     function readJsonStorage(key, fallback) {
@@ -117,78 +117,85 @@
         }
     }
 
-    function renderActiveSessionBanner() {
+    function getStoredToken() {
+        var token = localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+        if (token) return token;
         var currentUser = readJsonStorage(STORAGE_KEYS.CURRENT_USER, null);
-        if (!currentUser || !currentUser.token || !currentUser.name) {
+        return currentUser && currentUser.token ? currentUser.token : '';
+    }
+
+    function saveSession(user, token) {
+        var userProfile = Object.assign({}, user, { token: token });
+        localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(userProfile));
+        localStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, token);
+    }
+
+    function clearSession() {
+        localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+        localStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
+    }
+
+    async function renderActiveSessionBanner() {
+        var currentUser = readJsonStorage(STORAGE_KEYS.CURRENT_USER, null);
+        var token = getStoredToken();
+        if (!currentUser || !token || !currentUser.name) {
             el.sessionBanner.classList.add('d-none');
             return;
         }
 
-        el.sessionUserName.textContent = currentUser.name;
-        el.sessionUserRole.textContent = currentUser.role || 'Người dân';
-        el.btnContinueSession.href = currentUser.role === 'admin' ? 'admin.html' : 'index.html';
+        displayBanner(currentUser);
+
+        // Xác thực lại token với Back-end để đảm bảo phiên còn hiệu lực
+        try {
+            var res = await fetch(API_BASE_URL + '/auth/me', {
+                headers: {
+                    Authorization: 'Bearer ' + token
+                }
+            });
+            if (!res.ok) {
+                clearSession();
+                el.sessionBanner.classList.add('d-none');
+                return;
+            }
+            var data = await res.json();
+            if (data && data.user) {
+                saveSession(data.user, token);
+                displayBanner(data.user);
+            }
+        } catch (err) {
+            // Giữ banner tạm thời nếu mất kết nối mạng
+        }
+    }
+
+    function displayBanner(user) {
+        var isAdmin = String(user.role || '').toLowerCase() === 'admin';
+        el.sessionUserName.textContent = user.name || user.email;
+        el.sessionUserRole.textContent = user.role || 'Người dân';
+        el.btnContinueSession.href = isAdmin ? 'admin.html' : 'index.html';
         el.sessionBanner.classList.remove('d-none');
     }
 
     function handleLogout() {
-        localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
-        localStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
+        clearSession();
         el.sessionBanner.classList.add('d-none');
         showAlert('Đã đăng xuất khỏi phiên làm việc hiện tại.', 'info');
     }
 
-    function findRegisteredUserByEmail(email) {
-        var list = readJsonStorage(STORAGE_KEYS.REGISTERED_USERS, []);
-        if (!Array.isArray(list)) return null;
-        for (var i = 0; i < list.length; i++) {
-            if (list[i].email && list[i].email.toLowerCase() === email) {
-                return list[i];
-            }
-        }
-        return null;
+    function setLoginLoading(isLoading) {
+        el.btnLoginSubmit.disabled = isLoading;
+        el.loginSpinner.classList.toggle('d-none', !isLoading);
     }
 
-    function saveRegisteredUser(userRecord) {
-        var list = readJsonStorage(STORAGE_KEYS.REGISTERED_USERS, []);
-        if (!Array.isArray(list)) list = [];
-
-        var updated = false;
-        for (var i = 0; i < list.length; i++) {
-            if (list[i].email && list[i].email.toLowerCase() === userRecord.email.toLowerCase()) {
-                list[i] = userRecord;
-                updated = true;
-                break;
-            }
-        }
-
-        if (!updated) {
-            list.push(userRecord);
-        }
-
-        localStorage.setItem(STORAGE_KEYS.REGISTERED_USERS, JSON.stringify(list));
-    }
-
-    function formatDisplayNameFromEmail(email) {
-        var prefix = (email.split('@')[0] || 'Thành viên').replace(/[._-]+/g, ' ').trim();
-        if (!prefix) return 'Thành viên cứu hộ';
-
-        return prefix
-            .split(/\s+/)
-            .map(function (part) {
-                return part.charAt(0).toUpperCase() + part.slice(1);
-            })
-            .join(' ');
-    }
-
-    function createMockToken() {
-        return 'arm-token-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+    function setRegisterLoading(isLoading) {
+        el.btnRegisterSubmit.disabled = isLoading;
+        el.registerSpinner.classList.toggle('d-none', !isLoading);
     }
 
     /* --------------------------------------------------------------------------
-       Xử lý Submit Đăng nhập & Đăng ký
+       Xử lý Submit Đăng nhập & Đăng ký qua API
        -------------------------------------------------------------------------- */
 
-    function handleLoginSubmit(event) {
+    async function handleLoginSubmit(event) {
         event.preventDefault();
         hideAlert();
 
@@ -202,38 +209,56 @@
             return;
         }
 
-        var isAdmin = email === 'admin@gmail.com';
-        var registered = findRegisteredUserByEmail(email);
+        setLoginLoading(true);
 
-        var userProfile = {
-            name: isAdmin
-                ? 'Quản trị viên'
-                : (registered && registered.name ? registered.name : formatDisplayNameFromEmail(email)),
-            email: email,
-            role: isAdmin
-                ? 'admin'
-                : (registered && registered.role ? registered.role : 'Người dân'),
-            token: createMockToken()
-        };
+        try {
+            var response = await fetch(API_BASE_URL + '/auth/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    email: email,
+                    password: password
+                })
+            });
 
-        localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(userProfile));
-        localStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, userProfile.token);
+            var data = await response.json().catch(function () {
+                return {};
+            });
 
-        var redirectUrl = isAdmin ? 'admin.html' : 'index.html';
-        var successMessage = isAdmin
-            ? 'Đăng nhập quyền Quản trị viên thành công! Đang chuyển hướng sang admin.html...'
-            : 'Đăng nhập thành công! Đang chuyển hướng về bản đồ cứu trợ...';
+            if (!response.ok) {
+                setLoginLoading(false);
+                showAlert(data.message || 'Đăng nhập thất bại. Vui lòng kiểm tra lại thông tin.', 'danger');
+                return;
+            }
 
-        el.btnLoginSubmit.disabled = true;
-        el.loginSpinner.classList.remove('d-none');
-        showAlert(successMessage, 'success');
+            if (!data.token || !data.user) {
+                setLoginLoading(false);
+                showAlert('Phản hồi từ máy chủ không hợp lệ.', 'danger');
+                return;
+            }
 
-        setTimeout(function () {
-            window.location.href = redirectUrl;
-        }, 650);
+            saveSession(data.user, data.token);
+
+            var isAdmin = String(data.user.role || '').toLowerCase() === 'admin';
+            var redirectUrl = isAdmin ? 'admin.html' : 'index.html';
+            var successMessage = isAdmin
+                ? 'Đăng nhập quyền Quản trị viên thành công! Đang chuyển hướng sang admin.html...'
+                : 'Đăng nhập thành công! Đang chuyển hướng về bản đồ cứu trợ...';
+
+            showAlert(successMessage, 'success');
+
+            setTimeout(function () {
+                window.location.href = redirectUrl;
+            }, 550);
+        } catch (err) {
+            setLoginLoading(false);
+            showAlert('Không thể kết nối tới máy chủ (http://localhost:5000). Vui lòng kiểm tra lại Back-end.', 'danger');
+        }
     }
 
-    function handleRegisterSubmit(event) {
+    async function handleRegisterSubmit(event) {
         event.preventDefault();
         hideAlert();
 
@@ -251,28 +276,53 @@
             return;
         }
 
-        saveRegisteredUser({
-            name: name,
-            email: email,
-            phone: normalizedPhone,
-            role: role
-        });
+        setRegisterLoading(true);
 
-        // Chuyển mượt sang Tab Đăng nhập và điền sẵn Email vừa đăng ký
-        el.registerForm.reset();
-        el.registerForm.classList.remove('was-validated');
-        el.loginEmail.value = email;
-        el.loginPassword.value = '';
-        el.loginForm.classList.remove('was-validated');
+        try {
+            var response = await fetch(API_BASE_URL + '/auth/register', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    name: name,
+                    email: email,
+                    phone: normalizedPhone,
+                    password: password,
+                    role: role
+                })
+            });
 
-        suppressAlertClearOnTabSwitch = true;
-        bootstrap.Tab.getOrCreateInstance(el.tabLogin).show();
+            var data = await response.json().catch(function () {
+                return {};
+            });
 
-        showAlert(
-            'Đăng ký thành công (' + role + ')! Vui lòng đăng nhập để tiếp tục.',
-            'success'
-        );
-        el.loginPassword.focus();
+            setRegisterLoading(false);
+
+            if (!response.ok) {
+                showAlert(data.message || 'Đăng ký thất bại. Vui lòng thử lại.', 'danger');
+                return;
+            }
+
+            // Chuyển mượt sang Tab Đăng nhập và điền sẵn Email vừa đăng ký
+            el.registerForm.reset();
+            el.registerForm.classList.remove('was-validated');
+            el.loginEmail.value = email;
+            el.loginPassword.value = '';
+            el.loginForm.classList.remove('was-validated');
+
+            suppressAlertClearOnTabSwitch = true;
+            bootstrap.Tab.getOrCreateInstance(el.tabLogin).show();
+
+            showAlert(
+                (data.message || ('Đăng ký thành công (' + role + ')!')) + ' Vui lòng đăng nhập để tiếp tục.',
+                'success'
+            );
+            el.loginPassword.focus();
+        } catch (err) {
+            setRegisterLoading(false);
+            showAlert('Không thể kết nối tới máy chủ (http://localhost:5000). Vui lòng kiểm tra lại Back-end.', 'danger');
+        }
     }
 
     /* --------------------------------------------------------------------------

@@ -1,16 +1,21 @@
 /**
- * Animal Rescue Map - Logic chính (Vanilla JS + Leaflet.js + Bootstrap 5)
- * Quản lý bản đồ Đà Nẵng, bộ lọc trạng thái, định vị GPS,
- * tạo báo cáo mới (Modal + chọn vị trí trên bản đồ) và xem chi tiết (Offcanvas).
+ * Animal Rescue Map - Logic chính (Vanilla JS + Leaflet.js + Bootstrap 5 + REST API)
+ * Kết nối trực tiếp tới Back-end http://localhost:5000/api, quản lý bản đồ Đà Nẵng,
+ * bộ lọc trạng thái, định vị GPS, tạo báo cáo mới (upload ảnh multipart/form-data),
+ * cập nhật trạng thái và bình luận.
  */
 (function () {
     'use strict';
 
-    var MOCK = window.ANIMAL_RESCUE_MOCK || {
-        DANANG_CENTER: [16.048, 108.225],
-        DEFAULT_ZOOM: 13,
-        INITIAL_RESCUE_POINTS: [],
-        getDefaultImageForAnimal: function () { return ''; }
+    var API_BASE_URL = 'http://localhost:5000/api';
+    var BACKEND_ORIGIN = 'http://localhost:5000';
+    var DANANG_CENTER = [16.048, 108.225];
+    var DEFAULT_ZOOM = 13;
+
+    var DEFAULT_IMAGE_PATHS = {
+        'Chó': '/uploads/sample-dog-dragon-bridge.svg',
+        'Mèo': '/uploads/sample-cat-park.svg',
+        'Khác': '/uploads/sample-other-default.svg'
     };
 
     var STATUS_META = {
@@ -31,14 +36,13 @@
     };
 
     // Trạng thái ứng dụng
-    var rescuePoints = cloneInitialPoints(MOCK.INITIAL_RESCUE_POINTS);
+    var rescuePoints = [];
     var activeFilter = 'all';
     var activeDetailId = null;
+    var activeDetailPoint = null;
     var isPickingLocation = false;
     var isHidingForPick = false;
     var resumeModalAfterHide = false;
-    var uploadedImageDataUrl = '';
-    var nextPointId = getNextId(rescuePoints);
 
     // Các đối tượng Leaflet & Bootstrap
     var map = null;
@@ -60,26 +64,8 @@
         renderNavbarAuth();
         initMap();
         bindEvents();
-        updateFilterCounts();
-        renderMarkers();
-    }
-
-    function cloneInitialPoints(points) {
-        return points.map(function (point) {
-            return Object.assign({}, point, {
-                comments: Array.isArray(point.comments)
-                    ? point.comments.map(function (c) { return Object.assign({}, c); })
-                    : []
-            });
-        });
-    }
-
-    function getNextId(points) {
-        var maxId = 0;
-        points.forEach(function (p) {
-            if (p.id > maxId) maxId = p.id;
-        });
-        return maxId + 1;
+        updateFilterCounts({ all: 0, pending: 0, treating: 0, completed: 0 });
+        fetchPins();
     }
 
     function cacheDomElements() {
@@ -120,6 +106,7 @@
         el.locationStatusBox = document.getElementById('locationStatusBox');
         el.locationStatusText = document.getElementById('locationStatusText');
         el.locationError = document.getElementById('locationError');
+        el.btnSubmitReport = document.getElementById('btnSubmitReport');
 
         // Offcanvas elements
         el.rescueOffcanvas = document.getElementById('rescueOffcanvas');
@@ -150,8 +137,8 @@
 
     function initMap() {
         map = L.map('map', {
-            center: MOCK.DANANG_CENTER,
-            zoom: MOCK.DEFAULT_ZOOM,
+            center: DANANG_CENTER,
+            zoom: DEFAULT_ZOOM,
             zoomControl: false
         });
 
@@ -187,7 +174,7 @@
     }
 
     function bindEvents() {
-        // Bộ lọc trạng thái trên Navbar
+        // Bộ lọc trạng thái trên Navbar (gọi trực tiếp API GET /api/pins?status=...)
         el.filterGroup.addEventListener('click', function (event) {
             var btn = event.target.closest('.filter-btn');
             if (!btn) return;
@@ -197,7 +184,7 @@
 
             activeFilter = status;
             syncFilterButtons();
-            renderMarkers();
+            fetchPins();
         });
 
         // Nút "Vị trí của tôi" trên Navbar
@@ -209,7 +196,10 @@
         }
 
         // Đồng bộ trạng thái đăng nhập nếu localStorage thay đổi ở tab khác
-        window.addEventListener('storage', renderNavbarAuth);
+        window.addEventListener('storage', function () {
+            renderNavbarAuth();
+            fetchPins();
+        });
 
         // Nút nổi "+ Báo cáo cứu trợ"
         el.btnOpenReportModal.addEventListener('click', function () {
@@ -258,6 +248,146 @@
 
         // Gửi bình luận trong Offcanvas
         el.commentForm.addEventListener('submit', handleCommentSubmit);
+    }
+
+    /* --------------------------------------------------------------------------
+       Helper: JWT Token, URL Ảnh & Chuẩn hóa dữ liệu từ Back-end API
+       -------------------------------------------------------------------------- */
+
+    function readCurrentUser() {
+        try {
+            var raw = localStorage.getItem('currentUser');
+            if (!raw) return null;
+            var user = JSON.parse(raw);
+            return user && (user.name || user.email) ? user : null;
+        } catch (err) {
+            return null;
+        }
+    }
+
+    function getAuthToken() {
+        var token = localStorage.getItem('authToken');
+        if (token) return token;
+        var user = readCurrentUser();
+        return user && user.token ? user.token : '';
+    }
+
+    function buildAuthHeaders(extraHeaders) {
+        var headers = Object.assign({}, extraHeaders || {});
+        var token = getAuthToken();
+        if (token) {
+            headers.Authorization = 'Bearer ' + token;
+        }
+        return headers;
+    }
+
+    function resolveImageUrl(rawUrl, animalType) {
+        var fallbackPath = DEFAULT_IMAGE_PATHS[animalType] || DEFAULT_IMAGE_PATHS['Khác'];
+        var url = String(rawUrl || '').trim();
+        if (!url) {
+            return BACKEND_ORIGIN + fallbackPath;
+        }
+        if (/^(https?:)?\/\//i.test(url) || url.indexOf('data:') === 0) {
+            return url;
+        }
+        if (url.charAt(0) === '/') {
+            return BACKEND_ORIGIN + url;
+        }
+        return BACKEND_ORIGIN + '/' + url.replace(/^\/+/, '');
+    }
+
+    function formatRelativeTimeVi(dateInput) {
+        if (!dateInput) return 'Vừa xong';
+        var date = new Date(dateInput);
+        if (Number.isNaN(date.getTime())) {
+            return String(dateInput);
+        }
+
+        var diffSeconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
+        if (diffSeconds < 60) return 'Vừa xong';
+
+        var diffMinutes = Math.floor(diffSeconds / 60);
+        if (diffMinutes < 60) return diffMinutes + ' phút trước';
+
+        var diffHours = Math.floor(diffMinutes / 60);
+        if (diffHours < 24) return diffHours + ' giờ trước';
+
+        var diffDays = Math.floor(diffHours / 24);
+        if (diffDays < 30) return diffDays + ' ngày trước';
+
+        return date.toLocaleDateString('vi-VN');
+    }
+
+    function normalizeComment(comment) {
+        return {
+            id: comment.id,
+            author: comment.author || comment.authorName || 'Tình nguyện viên',
+            text: comment.text || comment.content || '',
+            time: comment.time || formatRelativeTimeVi(comment.createdAt),
+            isTrustedVolunteer: Boolean(comment.isTrustedVolunteer),
+            createdAt: comment.createdAt
+        };
+    }
+
+    function normalizePinFromApi(pin) {
+        var animalType = pin.animalType || (pin.category && pin.category.name) || 'Khác';
+        var rawPrimaryUrl =
+            pin.image ||
+            (Array.isArray(pin.images) && pin.images[0] && pin.images[0].url) ||
+            '';
+
+        return {
+            id: Number(pin.id),
+            title: pin.title || (animalType + ' cần cứu trợ'),
+            animalType: animalType,
+            urgency: pin.urgency || 'normal',
+            status: pin.status || 'pending',
+            lat: Number(pin.lat),
+            lng: Number(pin.lng),
+            address: pin.address || '',
+            description: pin.description || '',
+            image: resolveImageUrl(rawPrimaryUrl, animalType),
+            isHidden: Boolean(pin.isHidden),
+            isSensitiveBlurred: Boolean(pin.isSensitiveBlurred),
+            createdAt: formatRelativeTimeVi(pin.createdAt),
+            rawCreatedAt: pin.createdAt,
+            comments: Array.isArray(pin.comments) ? pin.comments.map(normalizeComment) : []
+        };
+    }
+
+    /* --------------------------------------------------------------------------
+       Gọi API tải danh sách điểm cứu trợ (GET /api/pins)
+       -------------------------------------------------------------------------- */
+
+    async function fetchPins() {
+        try {
+            var url = API_BASE_URL + '/pins';
+            if (activeFilter && activeFilter !== 'all') {
+                url += '?status=' + encodeURIComponent(activeFilter);
+            }
+
+            var response = await fetch(url, {
+                method: 'GET',
+                headers: buildAuthHeaders()
+            });
+
+            var data = await response.json().catch(function () {
+                return {};
+            });
+
+            if (!response.ok) {
+                throw new Error(data.message || 'Không thể tải danh sách điểm cứu trợ.');
+            }
+
+            rescuePoints = Array.isArray(data.pins) ? data.pins.map(normalizePinFromApi) : [];
+            updateFilterCounts(data.counts);
+            renderMarkers();
+        } catch (err) {
+            showToast(
+                err.message || 'Không thể kết nối máy chủ Back-end (http://localhost:5000).',
+                'danger'
+            );
+        }
     }
 
     /* --------------------------------------------------------------------------
@@ -366,19 +496,28 @@
         });
     }
 
-    function updateFilterCounts() {
-        var counts = {
-            all: rescuePoints.length,
-            pending: 0,
-            treating: 0,
-            completed: 0
-        };
-
-        rescuePoints.forEach(function (point) {
-            if (counts[point.status] !== undefined) {
-                counts[point.status] += 1;
-            }
-        });
+    function updateFilterCounts(serverCounts) {
+        var counts;
+        if (serverCounts && typeof serverCounts.all === 'number') {
+            counts = {
+                all: serverCounts.all,
+                pending: serverCounts.pending || 0,
+                treating: serverCounts.treating || 0,
+                completed: serverCounts.completed || 0
+            };
+        } else {
+            counts = {
+                all: rescuePoints.length,
+                pending: 0,
+                treating: 0,
+                completed: 0
+            };
+            rescuePoints.forEach(function (point) {
+                if (counts[point.status] !== undefined) {
+                    counts[point.status] += 1;
+                }
+            });
+        }
 
         Object.keys(counts).forEach(function (key) {
             var badge = el.filterGroup.querySelector('[data-count="' + key + '"]');
@@ -506,7 +645,7 @@
     }
 
     /* --------------------------------------------------------------------------
-       Chọn vị trí trực tiếp trên bản đồ & Modal Báo cáo
+       Chọn vị trí trực tiếp trên bản đồ & Modal Báo cáo (POST /api/pins)
        -------------------------------------------------------------------------- */
 
     function startPickingLocation() {
@@ -622,21 +761,19 @@
 
         var reader = new FileReader();
         reader.onload = function (loadEvent) {
-            uploadedImageDataUrl = String(loadEvent.target.result || '');
-            el.imagePreview.src = uploadedImageDataUrl;
+            el.imagePreview.src = String(loadEvent.target.result || '');
             el.imagePreviewWrapper.classList.remove('d-none');
         };
         reader.readAsDataURL(file);
     }
 
     function clearImageSelection() {
-        uploadedImageDataUrl = '';
         el.reportImage.value = '';
         el.imagePreview.src = '';
         el.imagePreviewWrapper.classList.add('d-none');
     }
 
-    function handleReportSubmit(event) {
+    async function handleReportSubmit(event) {
         event.preventDefault();
 
         var description = el.reportDescription.value.trim();
@@ -659,38 +796,68 @@
         var animalType = animalTypeInput ? animalTypeInput.value : 'Khác';
         var urgency = urgencyInput ? urgencyInput.value : 'normal';
         var address = el.reportAddress.value.trim();
+        var imageFile = el.reportImage.files && el.reportImage.files[0];
 
-        var newPoint = {
-            id: nextPointId++,
-            title: animalType + ' cần cứu trợ' + (address ? ' • ' + address : ''),
-            animalType: animalType,
-            urgency: urgency,
-            status: 'pending',
-            lat: lat,
-            lng: lng,
-            address: address || 'Đà Nẵng (' + lat.toFixed(5) + ', ' + lng.toFixed(5) + ')',
-            description: description,
-            image: uploadedImageDataUrl || MOCK.getDefaultImageForAnimal(animalType),
-            createdAt: 'Vừa xong',
-            comments: []
-        };
-
-        rescuePoints.unshift(newPoint);
-        updateFilterCounts();
-
-        // Chuyển sang "Tất cả" nếu bộ lọc hiện tại ẩn điểm mới tạo
-        if (activeFilter !== 'all' && activeFilter !== 'pending') {
-            activeFilter = 'all';
-            syncFilterButtons();
+        var formData = new FormData();
+        formData.append('animalType', animalType);
+        formData.append('urgency', urgency);
+        formData.append('description', description);
+        if (address) {
+            formData.append('address', address);
+        }
+        formData.append('lat', String(lat));
+        formData.append('lng', String(lng));
+        if (imageFile) {
+            formData.append('image', imageFile);
         }
 
-        renderMarkers();
-        removeTempPickMarker();
-        resetReportForm();
-        reportModal.hide();
+        if (el.btnSubmitReport) {
+            el.btnSubmitReport.disabled = true;
+            el.btnSubmitReport.textContent = 'Đang gửi...';
+        }
 
-        map.flyTo([newPoint.lat, newPoint.lng], Math.max(map.getZoom(), 15), { duration: 0.9 });
-        showToast('Đã gửi báo cáo cứu trợ mới lên bản đồ!', 'success');
+        try {
+            var response = await fetch(API_BASE_URL + '/pins', {
+                method: 'POST',
+                headers: buildAuthHeaders(),
+                body: formData
+            });
+
+            var data = await response.json().catch(function () {
+                return {};
+            });
+
+            if (!response.ok) {
+                showToast(data.message || 'Không thể gửi báo cáo cứu trợ.', 'danger');
+                return;
+            }
+
+            var createdPin = data.pin ? normalizePinFromApi(data.pin) : null;
+
+            // Chuyển sang "Tất cả" nếu bộ lọc hiện tại ẩn điểm mới tạo
+            if (activeFilter !== 'all' && activeFilter !== 'pending') {
+                activeFilter = 'all';
+                syncFilterButtons();
+            }
+
+            await fetchPins();
+
+            removeTempPickMarker();
+            resetReportForm();
+            reportModal.hide();
+
+            if (createdPin) {
+                map.flyTo([createdPin.lat, createdPin.lng], Math.max(map.getZoom(), 15), { duration: 0.9 });
+            }
+            showToast(data.message || 'Đã gửi báo cáo cứu trợ mới lên bản đồ!', 'success');
+        } catch (err) {
+            showToast('Lỗi kết nối tới máy chủ (http://localhost:5000).', 'danger');
+        } finally {
+            if (el.btnSubmitReport) {
+                el.btnSubmitReport.disabled = false;
+                el.btnSubmitReport.textContent = 'Gửi báo cáo';
+            }
+        }
     }
 
     function resetReportForm() {
@@ -706,7 +873,7 @@
     }
 
     /* --------------------------------------------------------------------------
-       Bootstrap Offcanvas: Chi tiết điểm cứu trợ & Bình luận
+       Bootstrap Offcanvas: Chi tiết điểm cứu trợ, Cập nhật trạng thái & Bình luận
        -------------------------------------------------------------------------- */
 
     function findPointById(id) {
@@ -721,11 +888,12 @@
         if (!point) return;
 
         activeDetailId = point.id;
+        activeDetailPoint = point;
 
         el.detailAnimalBadge.textContent = point.animalType;
         el.detailTitle.textContent = point.title;
 
-        el.detailImage.src = point.image || MOCK.getDefaultImageForAnimal(point.animalType);
+        el.detailImage.src = resolveImageUrl(point.image, point.animalType);
         el.detailImage.alt = 'Ảnh cứu trợ: ' + point.title;
 
         var urgencyMeta = URGENCY_META[point.urgency] || URGENCY_META.normal;
@@ -736,7 +904,8 @@
         el.detailStatusSelect.value = point.status;
 
         el.detailAddress.textContent = point.address;
-        el.detailCoords.textContent = point.lat.toFixed(5) + ', ' + point.lng.toFixed(5);
+        el.detailCoords.textContent = point.lat.toFixed(5) + ', ' + point.lng.toFixed(5) +
+            (point.isSensitiveBlurred ? ' (Vị trí tương đối)' : '');
         el.detailTime.textContent = point.createdAt;
         el.detailDescription.textContent = point.description;
 
@@ -755,17 +924,6 @@
     /* --------------------------------------------------------------------------
        Trạng thái Đăng nhập trên Navbar (đọc từ localStorage)
        -------------------------------------------------------------------------- */
-
-    function readCurrentUser() {
-        try {
-            var raw = localStorage.getItem('currentUser');
-            if (!raw) return null;
-            var user = JSON.parse(raw);
-            return user && (user.name || user.email) ? user : null;
-        } catch (err) {
-            return null;
-        }
-    }
 
     function renderNavbarAuth() {
         var user = readCurrentUser();
@@ -794,6 +952,7 @@
         if (el.commentAuthor) {
             el.commentAuthor.value = '';
         }
+        fetchPins();
         showToast('Đã đăng xuất tài khoản.', 'success');
     }
 
@@ -803,19 +962,47 @@
         el.detailStatusBadge.textContent = meta.label;
     }
 
-    function handleStatusUpdate() {
-        var point = findPointById(activeDetailId);
+    async function handleStatusUpdate() {
+        var point = findPointById(activeDetailId) || activeDetailPoint;
         if (!point) return;
 
+        var previousStatus = point.status;
         var newStatus = el.detailStatusSelect.value;
-        if (!STATUS_META[newStatus] || point.status === newStatus) return;
+        if (!STATUS_META[newStatus] || previousStatus === newStatus) return;
 
-        point.status = newStatus;
-        applyStatusBadge(newStatus);
-        updateFilterCounts();
-        renderMarkers();
+        el.detailStatusSelect.disabled = true;
 
-        showToast('Đã cập nhật trạng thái: ' + STATUS_META[newStatus].label, 'success');
+        try {
+            var response = await fetch(API_BASE_URL + '/pins/' + point.id + '/status', {
+                method: 'PATCH',
+                headers: buildAuthHeaders({
+                    'Content-Type': 'application/json'
+                }),
+                body: JSON.stringify({ status: newStatus })
+            });
+
+            var data = await response.json().catch(function () {
+                return {};
+            });
+
+            if (!response.ok) {
+                el.detailStatusSelect.value = previousStatus;
+                showToast(data.message || 'Không thể cập nhật trạng thái.', 'danger');
+                return;
+            }
+
+            point.status = newStatus;
+            activeDetailPoint = data.pin ? normalizePinFromApi(data.pin) : point;
+            applyStatusBadge(newStatus);
+            await fetchPins();
+
+            showToast('Đã cập nhật trạng thái: ' + STATUS_META[newStatus].label, 'success');
+        } catch (err) {
+            el.detailStatusSelect.value = previousStatus;
+            showToast('Lỗi kết nối tới máy chủ khi cập nhật trạng thái.', 'danger');
+        } finally {
+            el.detailStatusSelect.disabled = false;
+        }
     }
 
     function renderComments(comments) {
@@ -837,9 +1024,21 @@
             var header = document.createElement('div');
             header.className = 'd-flex align-items-center justify-content-between gap-2 mb-1';
 
+            var authorWrap = document.createElement('div');
+            authorWrap.className = 'd-flex align-items-center gap-1 flex-wrap';
+
             var author = document.createElement('strong');
             author.className = 'small text-dark';
             author.textContent = comment.author;
+            authorWrap.appendChild(author);
+
+            if (comment.isTrustedVolunteer) {
+                var badge = document.createElement('span');
+                badge.className = 'badge rounded-pill badge-trusted';
+                badge.style.fontSize = '0.65rem';
+                badge.textContent = '★ TNV uy tín';
+                authorWrap.appendChild(badge);
+            }
 
             var time = document.createElement('span');
             time.className = 'text-muted';
@@ -850,7 +1049,7 @@
             body.className = 'mb-0 small text-secondary lh-sm';
             body.textContent = comment.text;
 
-            header.appendChild(author);
+            header.appendChild(authorWrap);
             header.appendChild(time);
             item.appendChild(header);
             item.appendChild(body);
@@ -858,9 +1057,9 @@
         });
     }
 
-    function handleCommentSubmit(event) {
+    async function handleCommentSubmit(event) {
         event.preventDefault();
-        var point = findPointById(activeDetailId);
+        var point = findPointById(activeDetailId) || activeDetailPoint;
         if (!point) return;
 
         var text = el.commentText.value.trim();
@@ -869,18 +1068,46 @@
             return;
         }
 
-        var author = el.commentAuthor.value.trim() || 'Tình nguyện viên';
-        point.comments.push({
-            id: Date.now(),
-            author: author,
-            time: 'Vừa xong',
-            text: text
-        });
+        var loggedUser = readCurrentUser();
+        var author = el.commentAuthor.value.trim() || (loggedUser && loggedUser.name) || 'Tình nguyện viên';
+        var submitBtn = el.commentForm.querySelector('button[type="submit"]');
+        if (submitBtn) submitBtn.disabled = true;
 
-        renderComments(point.comments);
-        el.commentList.scrollTop = el.commentList.scrollHeight;
-        el.commentText.value = '';
-        showToast('Đã đăng bình luận mới.', 'success');
+        try {
+            var response = await fetch(API_BASE_URL + '/pins/' + point.id + '/comments', {
+                method: 'POST',
+                headers: buildAuthHeaders({
+                    'Content-Type': 'application/json'
+                }),
+                body: JSON.stringify({
+                    author: author,
+                    text: text
+                })
+            });
+
+            var data = await response.json().catch(function () {
+                return {};
+            });
+
+            if (!response.ok) {
+                showToast(data.message || 'Không thể gửi bình luận.', 'danger');
+                return;
+            }
+
+            var savedComment = data.comment
+                ? normalizeComment(data.comment)
+                : { id: Date.now(), author: author, time: 'Vừa xong', text: text };
+
+            point.comments.push(savedComment);
+            renderComments(point.comments);
+            el.commentList.scrollTop = el.commentList.scrollHeight;
+            el.commentText.value = '';
+            showToast(data.message || 'Đã đăng bình luận mới.', 'success');
+        } catch (err) {
+            showToast('Lỗi kết nối tới máy chủ khi đăng bình luận.', 'danger');
+        } finally {
+            if (submitBtn) submitBtn.disabled = false;
+        }
     }
 
     /* --------------------------------------------------------------------------
