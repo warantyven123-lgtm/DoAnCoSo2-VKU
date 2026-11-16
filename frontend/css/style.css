@@ -396,7 +396,7 @@ body.admin-page {
 }
 
 .image-preview-wrapper img {
-    max-height: 210px;
+    max-height: 150px;
     object-fit: cover;
 }
 

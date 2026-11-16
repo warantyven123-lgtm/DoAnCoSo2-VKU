@@ -202,7 +202,7 @@
         aria-hidden="true"
     >
         <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-fullscreen-sm-down">
-            <div class="modal-content border-0 shadow-lg">
+            <form id="reportForm" class="modal-content border-0 shadow-lg" novalidate>
                 <div class="modal-header border-bottom bg-light">
                     <div class="d-flex align-items-center gap-2">
                         <span class="modal-header-icon d-inline-flex align-items-center justify-content-center rounded-circle bg-danger-subtle text-danger">
@@ -216,8 +216,7 @@
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Đóng"></button>
                 </div>
 
-                <form id="reportForm" novalidate>
-                    <div class="modal-body p-3 p-sm-4">
+                <div class="modal-body p-3 p-sm-4">
                         <!-- Loại động vật -->
                         <div class="mb-3">
                             <label class="form-label fw-semibold">
@@ -313,7 +312,7 @@
                                 Vui lòng chọn tệp hình ảnh hợp lệ (JPG, PNG, WEBP...).
                             </div>
                             <div id="imagePreviewWrapper" class="image-preview-wrapper mt-2 d-none position-relative">
-                                <img id="imagePreview" src="" alt="Xem trước ảnh báo cáo" class="img-fluid rounded-3 border w-100">
+                                <img id="imagePreview" src="" alt="Xem trước ảnh báo cáo" class="img-fluid rounded-3 border w-100" style="max-height: 150px; object-fit: cover;">
                                 <button
                                     type="button"
                                     id="btnClearImage"
@@ -370,18 +369,17 @@
                                 Vui lòng xác định vị trí bằng GPS hoặc click trực tiếp lên bản đồ.
                             </div>
                         </div>
-                    </div>
+                </div>
 
-                    <div class="modal-footer border-top bg-light">
-                        <button type="button" class="btn btn-outline-secondary rounded-pill px-4" data-bs-dismiss="modal">
-                            Hủy
-                        </button>
-                        <button type="submit" id="btnSubmitReport" class="btn btn-danger rounded-pill px-4 fw-semibold">
-                            Gửi báo cáo
-                        </button>
-                    </div>
-                </form>
-            </div>
+                <div class="modal-footer border-top bg-light">
+                    <button type="button" class="btn btn-outline-secondary rounded-pill px-4" data-bs-dismiss="modal">
+                        Hủy
+                    </button>
+                    <button type="submit" id="btnSubmitReport" class="btn btn-danger rounded-pill px-4 fw-semibold">
+                        Gửi báo cáo
+                    </button>
+                </div>
+            </form>
         </div>
     </div>
 
